@@ -2,12 +2,19 @@
 
 [![NPM version](https://badge.fury.io/js/google-spreadsheet.png)](http://badge.fury.io/js/google-spreadsheet)
 
-A simple Node.js module for reading and manipulating data in Google Spreadsheets.
+[![CircleCI](https://circleci.com/gh/theoephraim/node-google-spreadsheet.svg?style=svg)](https://circleci.com/gh/theoephraim/node-google-spreadsheet)
+
+Node.js module to make interacting with Google Spreadsheets super easy (_uses v4 sheets API_)
 
 - with or without auth
-- cell-based API - read, write, bulk-updates
-- row-based API - read, update, delete
-- managing worksheets - add, remove, resize, change title
+- cell-based API - read, write, bulk-updates, formatting
+- row-based API - read, update, delete (based on the old v3 row-based calls)
+- managing worksheets - add, remove, resize, change title, formatting
+
+## Why?
+
+While the v4 sheets api is much easier to use than v3 was, the official google module is a giant meta-tool that handles all of their APIs. The module and the API itself are still awkward and the docs are still terrible.
+This module tries to provide simple and logical methods to handle the interactions most projects would need.
 
 ## Installation
 
@@ -17,107 +24,51 @@ A simple Node.js module for reading and manipulating data in Google Spreadsheets
 
 _This example is simply meant to show some of the things you can do._
 
-Note (the comments) that many of the calls are actually asynchronous, but I skipped showing the callbacks to make the example shorter. You also don't have to use [async](https://github.com/caolan/async) for control flow, but I find it helpful.
+Check out the examples folder for more options.
 
 ```javascript
-var GoogleSpreadsheet = require('google-spreadsheet');
-var async = require('async');
+const GoogleSpreadsheet = require('google-spreadsheet');
+const creds = require('./service-account-creds-from-google.json');
 
 // spreadsheet key is the long id in the sheets URL
-var doc = new GoogleSpreadsheet('<spreadsheet key>');
-var sheet;
+const doc = new GoogleSpreadsheet('<the sheet ID from the url>');
 
-async.series([
-  function setAuth(step) {
-    // see notes below for authentication instructions!
-    var creds = require('./google-generated-creds.json');
-    // OR, if you cannot save the file locally (like on heroku)
-    var creds_json = {
-      client_email: 'yourserviceaccountemailhere@google.com',
-      private_key: 'your long private key stuff here'
-    }
+(async function main() { // to allow async/await at root level
+  // use API key only for read-only access to public sheets
+  doc.useApiKey('YOUR-API-KEY');
+  // OR more commonly, use a service account for full access
+  await doc.useServiceAccountAuth(creds);
 
-    doc.useServiceAccountAuth(creds, step);
-  },
-  function getInfoAndWorksheets(step) {
-    doc.getInfo(function(err, info) {
-      console.log('Loaded doc: '+info.title+' by '+info.author.email);
-      sheet = info.worksheets[0];
-      console.log('sheet 1: '+sheet.title+' '+sheet.rowCount+'x'+sheet.colCount);
-      step();
-    });
-  },
-  function workingWithRows(step) {
-    // google provides some query options
-    sheet.getRows({
-      offset: 1,
-      limit: 20,
-      orderby: 'col2'
-    }, function( err, rows ){
-      console.log('Read '+rows.length+' rows');
+  await doc.getInfo(); // load basic doc properties, sheet info
+  console.log(doc.title);
+  const sheet = doc.sheetsByIndex[0];
+  await doc.updateProperties({ title: 'rename this document' })
 
-      // the row is an object with keys set by the column headers
-      rows[0].colname = 'new val';
-      rows[0].save(); // this is async
+  // interact with rows, ie first row of sheet is treated as column names / property keys
+  const rows = await sheet.getRows({ limit: 10 });
+  console.log(rows[0].firstColumn);
+  await sheet.addRow({ firstColumn: 'foo', secondColumn: 'bar' });
+  rows[0].firstColumn = 'newVal'
+  await rows[0].save();
+  await rows[0].delete();
 
-      // deleting a row
-      rows[0].del();  // this is async
+  // interact with cells
+  await sheet.loadCells('A1:E10'); // loads that range of cells;
+  const a1 = sheet.getCell(0, 0); // access cells using a zero-based index
+  const c6 = sheet.getCellByA1('C6'); // or A1 style notation
+  console.log(a1.formattedValue); // access everything about the cell
+  console.log(a1.value);
+  console.log(a1.formula);
+  a1.value = 123.456; // update value
+  c6.formula = '=A1'; // update formula
+  a1.format = { bold: true }; // modify formatting
+  await sheet.saveUpdatedCells(); // save updates in one call
 
-      step();
-    });
-  },
-  function workingWithCells(step) {
-    sheet.getCells({
-      'min-row': 1,
-      'max-row': 5,
-      'return-empty': true
-    }, function(err, cells) {
-      var cell = cells[0];
-      console.log('Cell R'+cell.row+'C'+cell.col+' = '+cell.value);
-
-      // cells have a value, numericValue, and formula
-      cell.value == '1'
-      cell.numericValue == 1;
-      cell.formula == '=ROW()';
-
-      // updating `value` is "smart" and generally handles things for you
-      cell.value = 123;
-      cell.value = '=A1+B2'
-      cell.save(); //async
-
-      // bulk updates make it easy to update many cells at once
-      cells[0].value = 1;
-      cells[1].value = 2;
-      cells[2].formula = '=A1+B1';
-      sheet.bulkUpdateCells(cells); //async
-
-      step();
-    });
-  },
-  function managingSheets(step) {
-    doc.addWorksheet({
-      title: 'my new sheet'
-    }, function(err, sheet) {
-
-      // change a sheet's title
-      sheet.setTitle('new title'); //async
-
-      //resize a sheet
-      sheet.resize({rowCount: 50, colCount: 20}); //async
-
-      sheet.setHeaderRow(['name', 'age', 'phone']); //async
-
-      // removing a worksheet
-      sheet.del(); //async
-
-      step();
-    });
-  }
-], function(err){
-    if( err ) {
-      console.log('Error: '+err);
-    }
-});
+  // manage worksheets
+  const newSheet = await doc.addSheet({ title: 'hot new sheet!' });
+  await newSheet.resize({ rowCount: 10, columnCount: 100 });
+  await newSheet.delete();
+})();
 ```
 
 ## Authentication
